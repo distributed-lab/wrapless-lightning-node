@@ -1,4 +1,4 @@
-use crate::{cli, InboundPaymentInfoStorage, NetworkGraph, OutboundPaymentInfoStorage};
+use crate::common::{InboundPaymentInfoStorage, NetworkGraph, OutboundPaymentInfoStorage};
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::Network;
 use chrono::Utc;
@@ -9,18 +9,19 @@ use lightning::util::ser::{Readable, ReadableArgs};
 use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
-use std::net::SocketAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::Path;
 use std::sync::Arc;
+use crate::hex_utils;
 
-pub(crate) const INBOUND_PAYMENTS_FNAME: &str = "inbound_payments";
-pub(crate) const OUTBOUND_PAYMENTS_FNAME: &str = "outbound_payments";
+pub const INBOUND_PAYMENTS_FNAME: &str = "inbound_payments";
+pub const OUTBOUND_PAYMENTS_FNAME: &str = "outbound_payments";
 
-pub(crate) struct FilesystemLogger {
+pub struct FilesystemLogger {
 	data_dir: String,
 }
 impl FilesystemLogger {
-	pub(crate) fn new(data_dir: String) -> Self {
+	pub fn new(data_dir: String) -> Self {
 		let logs_path = format!("{}/logs", data_dir);
 		fs::create_dir_all(logs_path.clone()).unwrap();
 		Self { data_dir: logs_path }
@@ -59,7 +60,39 @@ pub(crate) fn persist_channel_peer(path: &Path, peer_info: &str) -> std::io::Res
 	file.write_all(format!("{}\n", peer_info).as_bytes())
 }
 
-pub(crate) fn read_channel_peer_data(
+pub(crate) fn parse_peer_info(
+	peer_pubkey_and_ip_addr: String,
+) -> Result<(PublicKey, SocketAddr), std::io::Error> {
+	let mut pubkey_and_addr = peer_pubkey_and_ip_addr.split("@");
+	let pubkey = pubkey_and_addr.next();
+	let peer_addr_str = pubkey_and_addr.next();
+	if peer_addr_str.is_none() {
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::Other,
+			"ERROR: incorrectly formatted peer info. Should be formatted as: `pubkey@host:port`",
+		));
+	}
+
+	let peer_addr = peer_addr_str.unwrap().to_socket_addrs().map(|mut r| r.next());
+	if peer_addr.is_err() || peer_addr.as_ref().unwrap().is_none() {
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::Other,
+			"ERROR: couldn't parse pubkey@host:port into a socket address",
+		));
+	}
+
+	let pubkey = hex_utils::to_compressed_pubkey(pubkey.unwrap());
+	if pubkey.is_none() {
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::Other,
+			"ERROR: unable to parse given pubkey for node",
+		));
+	}
+
+	Ok((pubkey.unwrap(), peer_addr.unwrap().unwrap()))
+}
+
+pub fn read_channel_peer_data(
 	path: &Path,
 ) -> Result<HashMap<PublicKey, SocketAddr>, std::io::Error> {
 	let mut peer_data = new_hash_map();
@@ -69,7 +102,7 @@ pub(crate) fn read_channel_peer_data(
 	let file = File::open(path)?;
 	let reader = BufReader::new(file);
 	for line in reader.lines() {
-		match cli::parse_peer_info(line.unwrap()) {
+		match parse_peer_info(line.unwrap()) {
 			Ok((pubkey, socket_addr)) => {
 				peer_data.insert(pubkey, socket_addr);
 			},
@@ -79,7 +112,7 @@ pub(crate) fn read_channel_peer_data(
 	Ok(peer_data)
 }
 
-pub(crate) fn read_network(
+pub fn read_network(
 	path: &Path, network: Network, logger: Arc<FilesystemLogger>,
 ) -> NetworkGraph {
 	if let Ok(file) = File::open(path) {
@@ -90,7 +123,7 @@ pub(crate) fn read_network(
 	NetworkGraph::new(network, logger)
 }
 
-pub(crate) fn read_inbound_payment_info(path: &Path) -> InboundPaymentInfoStorage {
+pub fn read_inbound_payment_info(path: &Path) -> InboundPaymentInfoStorage {
 	if let Ok(file) = File::open(path) {
 		if let Ok(info) = InboundPaymentInfoStorage::read(&mut BufReader::new(file)) {
 			return info;
@@ -99,7 +132,7 @@ pub(crate) fn read_inbound_payment_info(path: &Path) -> InboundPaymentInfoStorag
 	InboundPaymentInfoStorage { payments: new_hash_map() }
 }
 
-pub(crate) fn read_outbound_payment_info(path: &Path) -> OutboundPaymentInfoStorage {
+pub fn read_outbound_payment_info(path: &Path) -> OutboundPaymentInfoStorage {
 	if let Ok(file) = File::open(path) {
 		if let Ok(info) = OutboundPaymentInfoStorage::read(&mut BufReader::new(file)) {
 			return info;
@@ -108,7 +141,7 @@ pub(crate) fn read_outbound_payment_info(path: &Path) -> OutboundPaymentInfoStor
 	OutboundPaymentInfoStorage { payments: new_hash_map() }
 }
 
-pub(crate) fn read_scorer(
+pub fn read_scorer(
 	path: &Path, graph: Arc<NetworkGraph>, logger: Arc<FilesystemLogger>,
 ) -> ProbabilisticScorer<Arc<NetworkGraph>, Arc<FilesystemLogger>> {
 	let params = ProbabilisticScoringDecayParameters::default();

@@ -9,16 +9,15 @@ use lightning::util::persist::KVStore;
 use lightning::util::ser::{Readable, WithoutLength, Writeable};
 
 use lightning_persister::fs_store::FilesystemStore;
-
+use crate::common::OutputSweeper;
 use crate::disk::FilesystemLogger;
 use crate::hex_utils;
-use crate::OutputSweeper;
 
 const DEPRECATED_PENDING_SPENDABLE_OUTPUT_DIR: &'static str = "pending_spendable_outputs";
 
 /// We updated to use LDK's OutputSweeper as part of upgrading to LDK 0.0.123, so migrate away from
 /// the old sweep persistence.
-pub(crate) async fn migrate_deprecated_spendable_outputs(
+pub async fn migrate_deprecated_spendable_outputs(
 	ldk_data_dir: String, keys_manager: Arc<KeysManager>, logger: Arc<FilesystemLogger>,
 	persister: Arc<FilesystemStore>, sweeper: Arc<OutputSweeper>,
 ) {

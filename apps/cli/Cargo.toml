@@ -1,0 +1,20 @@
+[package]
+name = "cli"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+rand = { workspace = true }
+tokio = { workspace = true }
+libc = { workspace = true }
+bitcoin = { workspace = true }
+lightning = { workspace = true }
+lightning-persister = { workspace = true }
+rustyline = { workspace = true }
+lightning-background-processor = { workspace = true }
+lightning-block-sync = { workspace = true }
+lightning-dns-resolver = { workspace = true }
+lightning-net-tokio = { workspace = true }
+bitcoin-bech32 = { workspace = true }
+
+ldk = {path = "../../crates/ldk"}

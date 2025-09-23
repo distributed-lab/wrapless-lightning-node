@@ -34,7 +34,7 @@ use std::time::Duration;
 use tokio::runtime::{self, Runtime};
 
 pub struct BitcoindClient {
-	pub(crate) bitcoind_rpc_client: Arc<RpcClient>,
+	pub bitcoind_rpc_client: Arc<RpcClient>,
 	network: Network,
 	host: String,
 	port: u16,
@@ -59,7 +59,7 @@ impl BlockSource for BitcoindClient {
 		Box::pin(async move { self.bitcoind_rpc_client.get_block(header_hash).await })
 	}
 
-	fn get_best_block(&self) -> AsyncBlockSourceResult<(BlockHash, Option<u32>)> {
+	fn get_best_block<'a>(&'a self) -> AsyncBlockSourceResult<(BlockHash, Option<u32>)> {
 		Box::pin(async move { self.bitcoind_rpc_client.get_best_block().await })
 	}
 }
@@ -68,7 +68,7 @@ impl BlockSource for BitcoindClient {
 const MIN_FEERATE: u32 = 253;
 
 impl BitcoindClient {
-	pub(crate) async fn new(
+	pub async fn new(
 		host: String, port: u16, rpc_user: String, rpc_password: String, network: Network,
 		handle: runtime::Handle, logger: Arc<FilesystemLogger>,
 	) -> std::io::Result<Self> {
@@ -81,7 +81,7 @@ impl BitcoindClient {
 			.await
 			.map_err(|_| {
 				std::io::Error::new(std::io::ErrorKind::PermissionDenied,
-				"Failed to make initial call to bitcoind - please check your RPC user/password and access settings")
+									"Failed to make initial call to bitcoind - please check your RPC user/password and access settings")
 			})?;
 		let mut fees: HashMap<ConfirmationTarget, AtomicU32> = HashMap::new();
 		fees.insert(ConfirmationTarget::MaximumFeeEstimate, AtomicU32::new(50000));

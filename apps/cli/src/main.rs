@@ -1,20 +1,14 @@
 mod args;
-pub mod bitcoind_client;
-mod cli;
-mod convert;
-mod disk;
-mod hex_utils;
-mod sweep;
+pub mod cli;
 
-use crate::bitcoind_client::BitcoindClient;
-use crate::disk::FilesystemLogger;
+use ldk::bitcoind_client::BitcoindClient;
+use ldk::disk::{FilesystemLogger, INBOUND_PAYMENTS_FNAME, OUTBOUND_PAYMENTS_FNAME};
 use bitcoin::blockdata::transaction::Transaction;
 use bitcoin::consensus::encode;
 use bitcoin::io;
 use bitcoin::network::Network;
 use bitcoin::BlockHash;
 use bitcoin_bech32::WitnessProgram;
-use disk::{INBOUND_PAYMENTS_FNAME, OUTBOUND_PAYMENTS_FNAME};
 use lightning::chain::{chainmonitor, ChannelMonitorUpdateStatus};
 use lightning::chain::{BestBlock, Filter, Watch};
 use lightning::events::bump_transaction::{BumpTransactionEventHandler, Wallet};
@@ -67,148 +61,8 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
-
-#[derive(Copy, Clone)]
-pub(crate) enum HTLCStatus {
-	Pending,
-	Succeeded,
-	Failed,
-}
-
-impl_writeable_tlv_based_enum!(HTLCStatus,
-	(0, Pending) => {},
-	(1, Succeeded) => {},
-	(2, Failed) => {},
-);
-
-pub(crate) struct MillisatAmount(Option<u64>);
-
-impl fmt::Display for MillisatAmount {
-	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		match self.0 {
-			Some(amt) => write!(f, "{}", amt),
-			None => write!(f, "unknown"),
-		}
-	}
-}
-
-impl Readable for MillisatAmount {
-	fn read<R: io::Read>(r: &mut R) -> Result<Self, DecodeError> {
-		let amt: Option<u64> = Readable::read(r)?;
-		Ok(MillisatAmount(amt))
-	}
-}
-
-impl Writeable for MillisatAmount {
-	fn write<W: Writer>(&self, w: &mut W) -> Result<(), io::Error> {
-		self.0.write(w)
-	}
-}
-
-pub(crate) struct PaymentInfo {
-	preimage: Option<PaymentPreimage>,
-	secret: Option<PaymentSecret>,
-	status: HTLCStatus,
-	amt_msat: MillisatAmount,
-}
-
-impl_writeable_tlv_based!(PaymentInfo, {
-	(0, preimage, required),
-	(2, secret, required),
-	(4, status, required),
-	(6, amt_msat, required),
-});
-
-pub(crate) struct InboundPaymentInfoStorage {
-	payments: HashMap<PaymentHash, PaymentInfo>,
-}
-
-impl_writeable_tlv_based!(InboundPaymentInfoStorage, {
-	(0, payments, required),
-});
-
-pub(crate) struct OutboundPaymentInfoStorage {
-	payments: HashMap<PaymentId, PaymentInfo>,
-}
-
-impl_writeable_tlv_based!(OutboundPaymentInfoStorage, {
-	(0, payments, required),
-});
-
-type ChainMonitor = chainmonitor::ChainMonitor<
-	InMemorySigner,
-	Arc<dyn Filter + Send + Sync>,
-	Arc<BitcoindClient>,
-	Arc<BitcoindClient>,
-	Arc<FilesystemLogger>,
-	Arc<
-		MonitorUpdatingPersister<
-			Arc<FilesystemStore>,
-			Arc<FilesystemLogger>,
-			Arc<KeysManager>,
-			Arc<KeysManager>,
-			Arc<BitcoindClient>,
-			Arc<BitcoindClient>,
-		>,
-	>,
->;
-
-pub(crate) type GossipVerifier = lightning_block_sync::gossip::GossipVerifier<
-	lightning_block_sync::gossip::TokioSpawner,
-	Arc<lightning_block_sync::rpc::RpcClient>,
-	Arc<FilesystemLogger>,
->;
-
-// Note that if you do not use an `OMDomainResolver` here you should use SimpleArcPeerManager
-// instead.
-pub(crate) type PeerManager = LdkPeerManager<
-	SocketDescriptor,
-	Arc<ChannelManager>,
-	Arc<P2PGossipSync<Arc<NetworkGraph>, Arc<GossipVerifier>, Arc<FilesystemLogger>>>,
-	Arc<OnionMessenger>,
-	Arc<FilesystemLogger>,
-	IgnoringMessageHandler,
-	Arc<KeysManager>,
->;
-
-pub(crate) type ChannelManager =
-	SimpleArcChannelManager<ChainMonitor, BitcoindClient, BitcoindClient, FilesystemLogger>;
-
-pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<FilesystemLogger>>;
-
-// Note that if you do not use an `OMDomainResolver` here you should use SimpleArcOnionMessenger
-// instead.
-type OnionMessenger = LdkOnionMessenger<
-	Arc<KeysManager>,
-	Arc<KeysManager>,
-	Arc<FilesystemLogger>,
-	Arc<ChannelManager>,
-	Arc<DefaultMessageRouter<Arc<NetworkGraph>, Arc<FilesystemLogger>, Arc<KeysManager>>>,
-	Arc<ChannelManager>,
-	Arc<ChannelManager>,
-	Arc<OMDomainResolver<Arc<ChannelManager>>>,
-	IgnoringMessageHandler,
->;
-
-pub(crate) type BumpTxEventHandler = BumpTransactionEventHandler<
-	Arc<BitcoindClient>,
-	Arc<Wallet<Arc<BitcoindClient>, Arc<FilesystemLogger>>>,
-	Arc<KeysManager>,
-	Arc<FilesystemLogger>,
->;
-
-pub(crate) type OutputSweeper = ldk_sweep::OutputSweeper<
-	Arc<BitcoindClient>,
-	Arc<BitcoindClient>,
-	Arc<BitcoindClient>,
-	Arc<dyn Filter + Send + Sync>,
-	Arc<FilesystemStore>,
-	Arc<FilesystemLogger>,
-	Arc<KeysManager>,
->;
-
-// Needed due to rust-lang/rust#63033.
-struct OutputSweeperWrapper(Arc<OutputSweeper>);
+use ldk::common::{ChannelManager, NetworkGraph, BumpTxEventHandler, PeerManager, InboundPaymentInfoStorage, OutboundPaymentInfoStorage, OutputSweeperWrapper, HTLCStatus, MillisatAmount, PaymentInfo, ChainMonitor, OnionMessenger, OutputSweeper, GossipVerifier};
+use ldk::{hex_utils, sweep};
 
 async fn handle_ldk_events(
 	channel_manager: Arc<ChannelManager>, bitcoind_client: &BitcoindClient,
@@ -237,8 +91,8 @@ async fn handle_ldk_events(
 					Network::Testnet | _ => bitcoin_bech32::constants::Network::Testnet,
 				},
 			)
-			.expect("Lightning funding tx should always be to a SegWit output")
-			.to_address();
+				.expect("Lightning funding tx should always be to a SegWit output")
+				.to_address();
 			let mut outputs = vec![StdHashMap::new()];
 			outputs[0].insert(addr, channel_value_satoshis as f64 / 100_000_000.0);
 			let raw_tx = bitcoind_client.create_raw_transaction(outputs).await;
@@ -570,7 +424,7 @@ async fn start_ldk() {
 		tokio::runtime::Handle::current(),
 		Arc::clone(&logger),
 	)
-	.await
+		.await
 	{
 		Ok(client) => Arc::new(client),
 		Err(e) => {
@@ -583,11 +437,11 @@ async fn start_ldk() {
 	let bitcoind_chain = bitcoind_client.get_blockchain_info().await.chain;
 	if bitcoind_chain
 		!= match args.network {
-			bitcoin::Network::Bitcoin => "main",
-			bitcoin::Network::Regtest => "regtest",
-			bitcoin::Network::Signet => "signet",
-			bitcoin::Network::Testnet | _ => "test",
-		} {
+		bitcoin::Network::Bitcoin => "main",
+		bitcoin::Network::Regtest => "regtest",
+		bitcoin::Network::Signet => "signet",
+		bitcoin::Network::Testnet | _ => "test",
+	} {
 		println!(
 			"Chain argument ({}) didn't match bitcoind chain ({})",
 			args.network, bitcoind_chain
@@ -680,10 +534,10 @@ async fn start_ldk() {
 	// Step 9: Initialize routing ProbabilisticScorer
 	let network_graph_path = format!("{}/network_graph", ldk_data_dir.clone());
 	let network_graph =
-		Arc::new(disk::read_network(Path::new(&network_graph_path), args.network, logger.clone()));
+		Arc::new(ldk::disk::read_network(Path::new(&network_graph_path), args.network, logger.clone()));
 
 	let scorer_path = format!("{}/scorer", ldk_data_dir.clone());
-	let scorer = Arc::new(RwLock::new(disk::read_scorer(
+	let scorer = Arc::new(RwLock::new(ldk::disk::read_scorer(
 		Path::new(&scorer_path),
 		Arc::clone(&network_graph),
 		Arc::clone(&logger),
@@ -821,8 +675,8 @@ async fn start_ldk() {
 			&mut cache,
 			chain_listeners,
 		)
-		.await
-		.unwrap()
+			.await
+			.unwrap()
 	} else {
 		polled_chain_tip
 	};
@@ -911,7 +765,7 @@ async fn start_ldk() {
 					peer_mgr.clone(),
 					tcp_stream.into_std().unwrap(),
 				)
-				.await;
+					.await;
 			});
 		}
 	});
@@ -934,10 +788,10 @@ async fn start_ldk() {
 		}
 	});
 
-	let inbound_payments = Arc::new(Mutex::new(disk::read_inbound_payment_info(Path::new(
+	let inbound_payments = Arc::new(Mutex::new(ldk::disk::read_inbound_payment_info(Path::new(
 		&format!("{}/{}", ldk_data_dir, INBOUND_PAYMENTS_FNAME),
 	))));
-	let outbound_payments = Arc::new(Mutex::new(disk::read_outbound_payment_info(Path::new(
+	let outbound_payments = Arc::new(Mutex::new(ldk::disk::read_outbound_payment_info(Path::new(
 		&format!("{}/{}", ldk_data_dir, OUTBOUND_PAYMENTS_FNAME),
 	))));
 	let recent_payments_payment_ids = channel_manager
@@ -1002,7 +856,7 @@ async fn start_ldk() {
 				network,
 				event,
 			)
-			.await;
+				.await;
 			Ok(())
 		}
 	};
@@ -1045,7 +899,7 @@ async fn start_ldk() {
 		interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 		loop {
 			interval.tick().await;
-			match disk::read_channel_peer_data(Path::new(&peer_data_path)) {
+			match ldk::disk::read_channel_peer_data(Path::new(&peer_data_path)) {
 				Ok(info) => {
 					for node_id in connect_cm
 						.list_channels()
@@ -1063,7 +917,7 @@ async fn start_ldk() {
 									peer_addr.clone(),
 									Arc::clone(&connect_pm),
 								)
-								.await;
+									.await;
 							}
 						}
 					}
@@ -1112,7 +966,7 @@ async fn start_ldk() {
 	let cli_persister = Arc::clone(&persister);
 	let cli_peer_manager = Arc::clone(&peer_manager);
 	let cli_poll = tokio::task::spawn_blocking(move || {
-		cli::poll_for_user_input(
+		cli::poll_for_user_input_wrapless(
 			cli_peer_manager,
 			cli_channel_manager,
 			cli_chain_monitor,
