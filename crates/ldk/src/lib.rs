@@ -3,5 +3,4 @@ pub mod convert;
 pub mod disk;
 pub mod hex_utils;
 pub mod sweep;
-pub mod cli_wrapless;
 pub mod common;
