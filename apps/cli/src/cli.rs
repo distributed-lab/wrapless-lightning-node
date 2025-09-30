@@ -14,9 +14,17 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use lightning::ln::msgs::SocketAddress;
+use lightning::ln::types::ChannelId;
+use lightning::routing::gossip::NodeId;
 use lightning::sign::KeysManager;
 use lightning_persister::fs_store::FilesystemStore;
 use rustyline::DefaultEditor;
+use crate::get_invoice::{get_invoice_cli};
+use crate::nodeinfo::node_info_cli;
+use crate::open_channel::open_channel_cli;
+use crate::send_payment::send_payment_cli;
+use crate::close_channel::close_channel_cli;
+use crate::force_close_channel::force_close_channel_cli;
 
 pub(crate) struct LdkUserInfo {
 	pub(crate) bitcoind_rpc_username: String,
@@ -62,13 +70,20 @@ pub(crate) fn poll_for_user_input_wrapless(
         if let Some(word) = words.next() {
             match word {
                 "help" => help(),
+                "openchannel" => open_channel_cli(words, &peer_manager, &channel_manager, &ldk_data_dir),
+                "getinvoice" => get_invoice_cli(words, &inbound_payments, &fs_store, &channel_manager),
+                "nodeinfo" => node_info_cli(&channel_manager, &chain_monitor, &peer_manager, &network_graph),
+                "sendpayment" => send_payment_cli(words, &keys_manager, &outbound_payments, &channel_manager,
+                line.clone(), &fs_store, &network_graph),
+                "listchannels" => list_channels(&channel_manager, &network_graph),
+                "closechannel" => close_channel_cli(words, &channel_manager),
+                "forceclosechannel" => force_close_channel_cli(words, &channel_manager),
                 "quit" | "exit" => break,
                 _ => println!("Unknown command. See `\"help\" for available commands."),
             }
         }
     }
 }
-
 
 pub(crate) fn help() {
     let package_version = env!("CARGO_PKG_VERSION");
@@ -81,24 +96,24 @@ pub(crate) fn help() {
     println!("  help\tShows a list of commands.");
     println!("  quit\tClose the application.");
     println!("\n  Channels:");
-    // println!("      openchannel pubkey@[host:port] <amt_satoshis> [--public] [--with-anchors]");
-    // println!("      closechannel <channel_id> <peer_pubkey>");
-    // println!("      forceclosechannel <channel_id> <peer_pubkey>");
-    // println!("      listchannels");
+    println!("      openchannel pubkey@[host:port] <amt_satoshis> [--public] [--with-anchors]");
+    println!("      closechannel <channel_id> <peer_pubkey>");
+    println!("      forceclosechannel <channel_id> <peer_pubkey>");
+    println!("      listchannels");
     println!("\n  Peers:");
     // println!("      connectpeer pubkey@host:port");
     // println!("      disconnectpeer <peer_pubkey>");
     // println!("      listpeers");
     println!("\n  Payments:");
-    // println!("      sendpayment <invoice|offer|human readable name> [<amount_msat>]");
+    println!("      sendpayment <invoice|offer|human readable name> [<amount_msat>]");
     // println!("      keysend <dest_pubkey> <amt_msats>");
     // println!("      listpayments");
     println!("\n  Invoices:");
-    // println!("      getinvoice <amt_msats> <expiry_secs>");
+    println!("      getinvoice <amt_msats> <expiry_secs>");
     // println!("      getoffer [<amt_msats>]");
     println!("\n  Other:");
     // println!("      signmessage <message>");
-    // println!("      nodeinfo");
+    println!("      nodeinfo");
 }
 
 pub(crate) async fn do_connect_peer(
@@ -135,4 +150,45 @@ pub(crate) async fn connect_peer_if_necessary(
         println!("ERROR: failed to connect to peer");
     }
     res
+}
+
+fn list_channels(channel_manager: &Arc<ChannelManager>, network_graph: &Arc<NetworkGraph>) {
+    print!("[");
+    for chan_info in channel_manager.list_channels() {
+        println!("");
+        println!("\t{{");
+        println!("\t\tchannel_id: {},", chan_info.channel_id);
+        if let Some(funding_txo) = chan_info.funding_txo {
+            println!("\t\tfunding_txid: {},", funding_txo.txid);
+        }
+
+        println!(
+            "\t\tpeer_pubkey: {},",
+            ldk::hex_utils::hex_str(&chan_info.counterparty.node_id.serialize())
+        );
+        if let Some(node_info) = network_graph
+            .read_only()
+            .nodes()
+            .get(&NodeId::from_pubkey(&chan_info.counterparty.node_id))
+        {
+            if let Some(announcement) = &node_info.announcement_info {
+                println!("\t\tpeer_alias: {}", announcement.alias());
+            }
+        }
+
+        if let Some(id) = chan_info.short_channel_id {
+            println!("\t\tshort_channel_id: {},", id);
+        }
+        println!("\t\tis_channel_ready: {},", chan_info.is_channel_ready);
+        println!("\t\tchannel_value_satoshis: {},", chan_info.channel_value_satoshis);
+        println!("\t\toutbound_capacity_msat: {},", chan_info.outbound_capacity_msat);
+        if chan_info.is_usable {
+            println!("\t\tavailable_balance_for_send_msat: {},", chan_info.outbound_capacity_msat);
+            println!("\t\tavailable_balance_for_recv_msat: {},", chan_info.inbound_capacity_msat);
+        }
+        println!("\t\tchannel_can_send_payments: {},", chan_info.is_usable);
+        println!("\t\tpublic: {},", chan_info.is_announced);
+        println!("\t}},");
+    }
+    println!("]");
 }

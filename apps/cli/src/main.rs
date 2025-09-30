@@ -1,5 +1,12 @@
 mod args;
 pub mod cli;
+mod open_channel;
+mod utils;
+mod get_invoice;
+mod nodeinfo;
+mod send_payment;
+mod close_channel;
+mod force_close_channel;
 
 use ldk::bitcoind_client::BitcoindClient;
 use ldk::disk::{FilesystemLogger, INBOUND_PAYMENTS_FNAME, OUTBOUND_PAYMENTS_FNAME};

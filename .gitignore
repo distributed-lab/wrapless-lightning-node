@@ -15,3 +15,5 @@ Cargo.lock
 
 # IDE
 .idea
+
+/data_bitcoin_regtest
